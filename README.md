@@ -10,8 +10,8 @@ WorkBuddy「Buddy 加油站」的每日自动化：**签到领积分**、**派�
 > | --- | --- | --- |
 > | 适合 | 习惯 GitHub 的用户 | **不想碰 GitHub / 零命令行** 的用户 |
 > | 托管 | GitHub Actions 免费定时任务 | 金山文档智能表格脚本 + 免费定时任务 |
-> | 配置 | Fork 仓库 + 填两个 Secret（多账号用清单） | 建表格 → 粘脚本 → 填两个单元格 |
-> | 多账号 | 支持（一个 Secret 存账号清单，不限数量） | 暂不支持 |
+> | 配置 | Fork 仓库 + 填两个 Secret（多账号按编号加） | 建表格 → 粘脚本 → 填两个单元格 |
+> | 多账号 | 支持（编号 Secret + 并行矩阵，只推一张卡） | 暂不支持 |
 > | 结果 | Actions 日志 / 飞书卡片 | 直接回写表格 / 飞书卡片 |
 >
 > 两种版本的 token 都由本机导出一次（[第 4 步](#第-4-步导出登录凭证二选一)）：
@@ -22,7 +22,7 @@ WorkBuddy「Buddy 加油站」的每日自动化：**签到领积分**、**派�
 
 - **云端定时** — 免费 runner + `schedule` 触发，本机关机照常执行
 - **一次做两件事** — 签到与成长中心旅行在同一次运行里完成
-- **多账号** — 一个 Secret 存账号清单，工作流逐行遍历；飞书合并成一张卡片，不刷屏
+- **多账号** — token 按编号存 Secret（`WB_ACCESS_TOKEN_1..N`），每个账号一个并行 job，飞书合并成一张卡片
 - **幂等** — 先查状态再决定是否领取；已签不重领，已派不重派
 - **结论解耦** — 猫猫模块任何异常都不影响签到结论；整体成败只看签到
 - **零明文入库** — 仓库不含任何凭据；token 由本机脚本导出后写入 GitHub Secret
@@ -34,7 +34,7 @@ WorkBuddy「Buddy 加油站」的每日自动化：**签到领积分**、**派�
 ┌──────────────────┐    gh secret   ┌────────────────────┐
 │ refresh_token.py │ ─────────────► │ Secret:            │
 │  读登录态 → 解密 │                │  WB_ACCESS_TOKEN   │
-└──────────────────┘                │  WB_ACCOUNTS       │ ← 多账号清单，可选
+└──────────────────┘                │  WB_ACCESS_TOKEN_N │ ← 多账号按编号，1..N
                                     │  FEISHU_WEBHOOK    │
                                     └─────────┬──────────┘
                                               │ 每天 cron
@@ -136,13 +136,13 @@ python refresh_token.py
 
 ![](assets/github_配置action的飞书、wb_access_token.png)
 
-单账号最少填两条（多账号再加）：
+单账号最少填两条（多账号按编号加）：
 
 | Name | Secret 里填什么 |
 | --- | --- |
-| `WB_ACCESS_TOKEN` | 第 4 步方式 B 复制的那串字符 |
+| `WB_ACCESS_TOKEN` | 第 4 步方式 B 复制的那串字符（账号 1） |
 | `FEISHU_WEBHOOK` | 第 3 步拿到的飞书机器人地址 |
-| `WB_ACCOUNTS` | **可选**：多账号清单，每行 `显示名=token`，见下方「多账号」 |
+| `WB_ACCESS_TOKEN_N` | **可选**：第 N 个账号的 token（`_1`、`_2`…），见下方「多账号」 |
 
 > 方式 A 已经自动写入 `WB_ACCESS_TOKEN` 的，这里只需要再填 `FEISHU_WEBHOOK` 一条。
 > 填完这个页面应该能看到两条记录（如上面截图所示）。
@@ -158,33 +158,32 @@ python refresh_token.py
 
 ### 多账号
 
-GitHub Actions 版支持一个仓库跑多个账号，账号数量跟随清单行数：
+GitHub Actions 版支持一个仓库跑多个账号：token 按编号存 Secret，每个账号一个并行 job，全部跑完汇总成一张飞书卡。
 
-1. 新建一个 Secret `WB_ACCOUNTS`，内容一行一个账号，格式 `显示名=token`：
-   ```text
-   主号=eyJhbGciOi...
-   小号=eyJhbGciOi...
-   三号=eyJhbGciOi...
-   ```
-   等号前的文字会显示在飞书卡片和 step summary 里，可以自己起名。
-2. 工作流会逐行遍历这个清单（10 个账号就是循环 10 次），**增减账号只改 `WB_ACCOUNTS`，不用动 workflow**。Secret 上限 48KB，几十个 token 也放得下。
-3. 没配 `WB_ACCOUNTS` 时自动回退到单账号的 `WB_ACCESS_TOKEN`；之前按旧文档加过 `WB_ACCESS_TOKEN_2` 的也能继续识别。
-4. **每个账号要单独导出 token**：在 WorkBuddy 里登录对应账号 → 运行 `python refresh_token.py` 复制打印结果，攒齐后一起粘进 `WB_ACCOUNTS`。`--gh-repo` 模式只会写单账号的 `WB_ACCESS_TOKEN`，多账号清单请手动维护。
-5. 账号之间**串行**执行（请求天然错开，降低风控风险），单个账号失败只记 warning，不影响其他账号；飞书只发**一张卡**，卡片分「签到」「猫猫旅行」两节，每节里每个账号一行；Actions 的 step summary 是多账号表格。
-6. token 各自约 28 天过期，从清单里删掉旧行、换成新 token 即可。
+1. 每个账号导出 token 后，存进对应编号的 Secret：`WB_ACCESS_TOKEN_1`、`WB_ACCESS_TOKEN_2`…（账号 1 也可以继续用无后缀的 `WB_ACCESS_TOKEN`）。
+2. 在仓库 **Settings → Secrets and variables → Actions → Variables** 新建变量 `WB_ACCOUNT_COUNT`，值填账号数量（例如 `10`）。工作流据此生成 1..N 的矩阵，**增减账号只改变量，不用动 workflow**。
+   - 编号不连续时，改用变量 `WB_ACCOUNT_KEYS=1,3,7` 指定（优先级高于 COUNT）。
+3. 每个账号一个 job **并行**执行（`max-parallel: 10`），单个账号失败只记 warning，不影响其他账号。
+4. 全部跑完后由汇总 job 合并结果，只推**一张**飞书卡（按编号排序），step summary 是多账号表格。
+5. token 各自约 28 天过期，更新对应编号的 Secret 即可。
 
-> 为什么不是一个账号一条 Secret？GitHub 的 Secret 值只写不可读，workflow 运行时也无法枚举 Secret 名称，做「每账号一条 Secret + 自动遍历」就必须在 YAML 里硬编码账号名。用一个清单 Secret 换来「加账号不改代码」，也是 CI 里的常见做法；代价是轮换时改整条 Secret，建议自己留一份清单备份。
+> 为什么要 `WB_ACCOUNT_COUNT`？GitHub 的 Secret 名称无法在运行时枚举，值也读不回来，所以必须有一个地方告诉工作流「一共有几个账号」。这个变量只是数字、不含凭据，也是唯一需要随账号数量变化的地方。
+>
+> 账号很多时注意 Actions 额度：每个账号一个 job（约 20–30 秒），公开仓库免费不限，私有仓库每月 2000 分钟。
 
 ## 配置项
 
 ### Actions 工作流（`daily.yml`）
 
-| 变量 | 说明 |
-| --- | --- |
-| `WB_ACCOUNTS` | 多账号清单，每行 `显示名=token`。workflow 逐行遍历并调用 `wb_auto.py`，跑完后合并推送一张飞书卡；未配置时回退单账号 `WB_ACCESS_TOKEN` |
-| `WB_ENDPOINT` | 接口地址，默认 `https://copilot.tencent.com` |
+| 名称 | 类型 | 说明 |
+| --- | --- | --- |
+| `WB_ACCOUNT_COUNT` | Variable | 账号数量，生成 1..N 的矩阵；与 `WB_ACCOUNT_KEYS` 二选一 |
+| `WB_ACCOUNT_KEYS` | Variable | 编号列表（如 `1,3,7`），用于不连续编号，优先级高于 COUNT |
+| `WB_ACCESS_TOKEN_N` | Secret | 第 N 个账号的 token；账号 1 可回退到 `WB_ACCESS_TOKEN` |
+| `FEISHU_WEBHOOK` | Secret | 飞书机器人地址，缺失则不推送 |
+| `WB_ENDPOINT` | 环境变量 | 接口地址，默认 `https://copilot.tencent.com` |
 
-`wb_auto.py` 本身仍是单账号逻辑，多账号由 workflow 循环调用实现。
+`wb_auto.py` 本身仍是单账号逻辑，多账号由 workflow 的 matrix 并行调用实现。
 
 ### Actions 侧（`wb_auto.py`）
 
@@ -231,7 +230,7 @@ GitHub Actions 版支持一个仓库跑多个账号，账号数量跟随清单�
 | `1` | 签到未达成（猫猫失败不在此列） |
 | `2` | 缺少 `WB_ACCESS_TOKEN` |
 
-workflow 多账号时逐个执行并收集退出码，只对未完成的账号发 `::warning::`，不会因个别账号失败中断整轮或让运行变红。因此一次运行显示绿色不代表签到一定成功——**以日志、step summary 与飞书卡片为准**。
+workflow 给每个账号起一个并行 job，收集各自的退出码，只对未完成的账号发 `::warning::`，不会因个别账号失败中断整轮或让运行变红。因此一次运行显示绿色不代表签到一定成功——**以日志、step summary 与飞书卡片为准**。
 
 ## 接口
 
@@ -272,7 +271,7 @@ wps/                          WPS 金山文档版（脚本 + 说明，见 wps/RE
 
 ## 常见问题
 
-**令牌过期** — token 由客户端签发，有效期约 28 天（`expiresIn` 2419200）。日志或飞书出现「认证被拒」时，本机重跑 `python refresh_token.py --gh-repo OWNER/REPO` 覆盖即可（`OWNER/REPO` 换成你自己的仓库；exe 同理：`refresh_token.exe --gh-repo OWNER/REPO`）。多账号要逐个账号登录后重导，替换 `WB_ACCOUNTS` 清单里对应的那一行（`--gh-repo` 只写单账号 Secret，多账号清单请手动改）。
+**令牌过期** — token 由客户端签发，有效期约 28 天（`expiresIn` 2419200）。日志或飞书出现「认证被拒」时，本机重跑 `python refresh_token.py --gh-repo OWNER/REPO` 覆盖即可（`OWNER/REPO` 换成你自己的仓库；exe 同理：`refresh_token.exe --gh-repo OWNER/REPO`）。多账号要逐个账号登录后重导，更新对应编号的 Secret（`WB_ACCESS_TOKEN_2` 等）；`--gh-repo` 只写 `WB_ACCESS_TOKEN`，编号 Secret 请在网页手动更新。
 
 **fork 之后 Actions 页签是空的** — fork 来的仓库默认不启用 Actions。进 Actions 页签，点页面中间的 **I understand my workflows, go ahead and enable them** 启用一次即可。
 
