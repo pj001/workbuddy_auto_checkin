@@ -58,6 +58,8 @@ jobs:
           # 留空时按仓库变量 WB_ACCESS_COUNT 决定跑账号 1..N（默认 1）
           ACCOUNTS: ${{ github.event.inputs.accounts }}
           WB_ACCESS_COUNT: ${{ vars.WB_ACCESS_COUNT }}
+          # 兼容误建成 Secret 的情况（建议优先用 Variables）
+          WB_ACCESS_COUNT_SECRET: ${{ secrets.WB_ACCESS_COUNT }}
           # 兼容旧变量名
           WB_COUNT: ${{ vars.WB_COUNT }}
           # 账号 1 兼容无后缀 Secret；账号 N 用 WB_ACCESS_TOKEN_N
@@ -86,12 +88,29 @@ jobs:
           if [ -n "${ACCOUNTS:-}" ]; then
             list_src="$ACCOUNTS"
           else
-            limit="${WB_ACCESS_COUNT:-${WB_COUNT:-1}}"
+            if [ -n "${WB_ACCESS_COUNT:-}" ]; then
+              limit="$WB_ACCESS_COUNT"
+              limit_src="Variable WB_ACCESS_COUNT"
+            elif [ -n "${WB_ACCESS_COUNT_SECRET:-}" ]; then
+              limit="$WB_ACCESS_COUNT_SECRET"
+              limit_src="Secret WB_ACCESS_COUNT（建议改建成 Variable）"
+            elif [ -n "${WB_COUNT:-}" ]; then
+              limit="$WB_COUNT"
+              limit_src="Variable WB_COUNT（旧名）"
+            else
+              limit=1
+              limit_src="默认值"
+            fi
+            echo "账号数量：$limit（来源：$limit_src）"
+
             case "$limit" in ''|*[!0-9]*) limit=1 ;; esac
             [ "$limit" -ge 1 ] || limit=1
             if [ "$limit" -gt 10 ]; then
               echo "::warning::WB_ACCESS_COUNT=$limit 超过账号位上限 10，只跑 1-10"
               limit=10
+            fi
+            if [ "$limit" -eq 1 ] && [ -n "${T2:-}" ]; then
+              echo "::warning::检测到 WB_ACCESS_TOKEN_2，但当前只跑账号 1。请把 Variables 里的 WB_ACCESS_COUNT 设为 2（或以上）"
             fi
             list_src=$(seq -s, 1 "$limit")
           fi

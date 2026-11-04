@@ -163,7 +163,7 @@ python refresh_token.py
 
 账号数量由**仓库变量 `WB_ACCESS_COUNT`** 控制，最多支持 10 个账号位，全部在**同一个 job 里循环执行**：
 
-1. 在仓库 **Settings → Secrets and variables → Actions → Variables** 新建 `WB_ACCESS_COUNT`，值填账号数量（例如 `2`），就会跑账号 1..2。
+1. 在仓库 **Settings → Secrets and variables → Actions → Variables** 新建 `WB_ACCESS_COUNT`，值填账号数量（例如 `2`），就会跑账号 1..2。误建在 Secrets 下也能识别，但建议用 Variables。
 2. 账号 1 用 `WB_ACCESS_TOKEN`（也可以改用 `WB_ACCESS_TOKEN_1`）；账号 N 用 `WB_ACCESS_TOKEN_N`。
 3. 没配 token 的账号直接跳过，日志里显示「账号 N 未配置 token，跳过」，不占 runner、不发请求。
 4. 已配置的账号按编号顺序串行执行，单个账号失败只记 warning，不影响其他账号；全部跑完后汇总成**一张**飞书卡（按编号排序），step summary 是多账号表格。
@@ -187,7 +187,7 @@ python refresh_token.py
 | `FEISHU_WEBHOOK` | Secret | 飞书机器人地址，缺失则不推送 |
 | `WB_ENDPOINT` | 环境变量 | 接口地址，默认 `https://copilot.tencent.com` |
 
-旧变量名 `WB_COUNT` 仍然兼容，但建议统一用 `WB_ACCESS_COUNT`。
+旧变量名 `WB_COUNT` 仍然兼容；`WB_ACCESS_COUNT` 误建在 Secrets 下也能读到，但建议放 Variables。运行日志会打印「账号数量：N（来源：…）」，可用于确认实际读取值。
 
 手动 Run workflow 时可用 `accounts` 输入框覆盖（逗号分隔，如 `1,2,5`）。要加第 11 个账号，在 `daily.yml` 里加一条 `T11` 并把上限改到 11。
 
