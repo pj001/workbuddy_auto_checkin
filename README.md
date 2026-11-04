@@ -116,6 +116,10 @@ python refresh_token.py --gh-repo 你的用户名/workbuddy_auto_checkin
 
 脚本会解密并直接把 token 写进你仓库的 Secret，屏幕显示「已写入」即可跳到第 5 步。
 
+> 多账号：切换登录到第 N 个账号后，加 `--secret-name` 指定编号 Secret：
+> `python refresh_token.py --gh-repo OWNER/REPO --secret-name WB_ACCESS_TOKEN_2`
+> （`refresh_token.exe` 是旧版打包，暂不支持这个参数；没有 Python 时请在网页手动建 Secret。）
+
 **方式 B：没装 gh CLI —— 先打印出来，再手动粘贴**
 
 在项目文件夹里运行：
@@ -164,12 +168,15 @@ python refresh_token.py
 账号数量由**仓库变量 `WB_ACCESS_COUNT`** 控制，最多支持 10 个账号位，全部在**同一个 job 里循环执行**：
 
 1. 在仓库 **Settings → Secrets and variables → Actions → Variables** 新建 `WB_ACCESS_COUNT`，值填账号数量（例如 `2`），就会跑账号 1..2。误建在 Secrets 下也能识别，但建议用 Variables。
-2. 账号 1 用 `WB_ACCESS_TOKEN`（也可以改用 `WB_ACCESS_TOKEN_1`）；账号 N 用 `WB_ACCESS_TOKEN_N`。
-3. 没配 token 的账号直接跳过，日志里显示「账号 N 未配置 token，跳过」，不占 runner、不发请求。
-4. 已配置的账号按编号顺序串行执行，单个账号失败只记 warning，不影响其他账号；全部跑完后汇总成**一张**飞书卡（按编号排序），step summary 是多账号表格。
-5. **手动运行可以在 Run workflow 面板里填 `accounts`**（逗号分隔，如 `1,2,5`），会覆盖 `WB_ACCESS_COUNT`；留空则按 `WB_ACCESS_COUNT` 执行。
-6. 超过 10 个账号：在 `.github/workflows/daily.yml` 的 `T1..T10` 后加 `T11`，并把上限判断改到 11。
-7. token 各自约 28 天过期，更新对应 Secret 即可。
+2. **每个账号分别导出 token**：在 WorkBuddy 里登录该账号，然后运行
+   `python refresh_token.py --gh-repo OWNER/REPO --secret-name WB_ACCESS_TOKEN_2`
+   第 N 个账号就把名称换成 `WB_ACCESS_TOKEN_N`；账号 1 可以省略这个参数（默认写 `WB_ACCESS_TOKEN`）。
+3. 账号 1 用 `WB_ACCESS_TOKEN`（也可以改用 `WB_ACCESS_TOKEN_1`）；账号 N 用 `WB_ACCESS_TOKEN_N`。
+4. 没配 token 的账号直接跳过，日志里显示「账号 N 未配置 token，跳过」，不占 runner、不发请求。
+5. 已配置的账号按编号顺序串行执行，单个账号失败只记 warning，不影响其他账号；全部跑完后汇总成**一张**飞书卡（按编号排序），step summary 是多账号表格。
+6. **手动运行可以在 Run workflow 面板里填 `accounts`**（逗号分隔，如 `1,2,5`），会覆盖 `WB_ACCESS_COUNT`；留空则按 `WB_ACCESS_COUNT` 执行。
+7. 超过 10 个账号：在 `.github/workflows/daily.yml` 的 `T1..T10` 后加 `T11`，并把上限判断改到 11。
+8. token 各自约 28 天过期，更新对应 Secret 即可。
 
 > 为什么是固定 10 个槽位？GitHub 无法在运行时枚举或读取 Secret，只能按固定编号逐个尝试。所有槽位在同一个 job 里循环，空槽位只多一行日志，不会多起 job。
 
@@ -279,7 +286,7 @@ wps/                          WPS 金山文档版（脚本 + 说明，见 wps/RE
 
 ## 常见问题
 
-**令牌过期** — token 由客户端签发，有效期约 28 天（`expiresIn` 2419200）。日志或飞书出现「认证被拒」时，本机重跑 `python refresh_token.py --gh-repo OWNER/REPO` 覆盖即可（`OWNER/REPO` 换成你自己的仓库；exe 同理：`refresh_token.exe --gh-repo OWNER/REPO`）。多账号要逐个账号登录后重导，更新对应编号的 Secret（`WB_ACCESS_TOKEN_2` 等）；`--gh-repo` 只写 `WB_ACCESS_TOKEN`，编号 Secret 请在网页手动更新。
+**令牌过期** — token 由客户端签发，有效期约 28 天（`expiresIn` 2419200）。日志或飞书出现「认证被拒」时，本机重跑 `python refresh_token.py --gh-repo OWNER/REPO` 覆盖即可（`OWNER/REPO` 换成你自己的仓库；exe 同理：`refresh_token.exe --gh-repo OWNER/REPO`）。多账号要逐个账号登录后重导，加 `--secret-name WB_ACCESS_TOKEN_N` 直接更新对应编号的 Secret（例如 `--secret-name WB_ACCESS_TOKEN_2`）。
 
 **只跑了账号 1 / 只签到一个账号** — 检查变量 `WB_ACCESS_COUNT` 是否大于 1，以及 `WB_ACCESS_TOKEN_2` 等编号 Secret 是否存在（账号 1 用 `WB_ACCESS_TOKEN`，账号 2 用 `WB_ACCESS_TOKEN_2`…）。`WB_ACCESS_COUNT` 默认 1，手动运行时也可以在 `accounts` 输入框里直接指定。
 
