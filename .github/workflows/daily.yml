@@ -16,6 +16,11 @@ on:
     - cron: "10 6 * * *"    # 06:10 UTC = 14:10 北京（备份）
     - cron: "10 12 * * *"   # 12:10 UTC = 20:10 北京（备份）
   workflow_dispatch:
+    inputs:
+      accounts:
+        description: "账号编号，逗号分隔（如 1,2,3）；留空默认 1-10"
+        required: false
+        default: "1,2,3,4,5,6,7,8,9,10"
 
 permissions:
   contents: read
@@ -36,7 +41,8 @@ jobs:
       fail-fast: false
       max-parallel: 10
       matrix:
-        account: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        # 手动运行时可在 Run workflow 里填账号编号；定时任务默认 1-10。
+        account: ${{ fromJSON(format('[{0}]', github.event.inputs.accounts || '1,2,3,4,5,6,7,8,9,10')) }}
     steps:
       - name: 检出仓库
         uses: actions/checkout@v4

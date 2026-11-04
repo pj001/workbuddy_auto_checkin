@@ -152,6 +152,7 @@ python refresh_token.py
 1. 打开你的仓库 → 点上方 **Actions** 页签
 2. 左侧选 **Buddy 加油站每日自动化**
 3. 右侧点 **Run workflow** 下拉，再点绿色的 **Run workflow**
+   - 面板里有个 `accounts` 输入框：填 `1,2` 就只跑账号 1 和 2；留空则跑默认的 1-10
 4. 等半分钟左右，刷新页面，飞书应该收到一条消息
 
 > 这个页面显示绿色不代表签到一定成功（猫猫出问题不影响整体结论）。**以飞书收到的消息为准。**
@@ -165,7 +166,8 @@ workflow 默认就有 **10 个账号位**，不需要任何额外配置：
 3. **没配 token 的账号位会自动跳过**，日志里显示「账号 N 未配置 token，跳过」，不影响已配置的账号。
 4. 每个账号一个 job **并行**执行（`max-parallel: 10`），单个账号失败只记 warning，不影响其他账号；全部跑完后汇总成**一张**飞书卡（按编号排序），step summary 是多账号表格。
 5. 想加第 11 个账号：在 `.github/workflows/daily.yml` 的 `matrix.account` 列表末尾加 `11`，再建 `WB_ACCESS_TOKEN_11`。
-6. token 各自约 28 天过期，更新对应 Secret 即可。
+6. **手动运行可以在 Run workflow 面板里填 `accounts`**（逗号分隔，如 `1,2,5`）；留空则跑默认的 1-10。定时任务不受影响。
+7. token 各自约 28 天过期，更新对应 Secret 即可。
 
 > 为什么没配的账号位也会起 job？GitHub 无法在运行时枚举或读取 Secret，只能按固定编号逐个尝试；空账号的 job 只做一次 token 检查就退出，很快。
 
@@ -182,7 +184,7 @@ workflow 默认就有 **10 个账号位**，不需要任何额外配置：
 | `FEISHU_WEBHOOK` | Secret | 飞书机器人地址，缺失则不推送 |
 | `WB_ENDPOINT` | 环境变量 | 接口地址，默认 `https://copilot.tencent.com` |
 
-账号位由 `daily.yml` 里 `matrix.account` 的列表决定，默认 `[1..10]`；加到 11 个时同步在列表里加 `11`。
+账号位默认 1-10；手动 Run workflow 时可用 `accounts` 输入框覆盖（逗号分隔，如 `1,2,5`）。要长期加第 11 个账号，在 `daily.yml` 的 `matrix.account` 默认列表里加 `11`。
 
 `wb_auto.py` 本身仍是单账号逻辑，多账号由 workflow 的 matrix 并行调用实现。
 
