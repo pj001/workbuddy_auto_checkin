@@ -45,42 +45,126 @@ jobs:
           "$PY" -c 'import sys; print("使用解释器:", sys.executable, sys.version.split()[0])'
           echo "python_path=$PY" >> "$GITHUB_OUTPUT"
 
-      - name: 执行签到与派猫猫
+      - name: 执行签到与派猫猫（多账号）
         id: run
         env:
-          WB_ACCESS_TOKEN: ${{ secrets.WB_ACCESS_TOKEN }}
-          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
           WB_ENDPOINT: https://copilot.tencent.com
-          WB_RESULT_FILE: ${{ runner.temp }}/wb_result.json
+          # 每行一个账号：显示名=对应的 GitHub Secret。
+          # 目前配两个账号：主账号沿用原 Secret WB_ACCESS_TOKEN，
+          # 第二个账号用 WB_ACCESS_TOKEN_2（没配会被跳过并给出 warning）。
+          # 再加账号：复制一行、改显示名，并在仓库 Secrets 里新建对应 Secret。
+          # token 只在运行时内存中使用，脚本自身会脱敏，不会出现在日志里。
+          WB_TOKENS: |
+            账号1=${{ secrets.WB_ACCESS_TOKEN }}
+            账号2=${{ secrets.WB_ACCESS_TOKEN_2 }}
+        run: |
+          # GitHub 默认用 bash -e 执行；这里要收集每个账号的退出码再继续，
+          # 所以先关掉 -e，失败只记 warning，不中断后面的账号。
+          set +e
+          set -uo pipefail
+          PY="${{ steps.py.outputs.python_path }}"
+          DIR="$RUNNER_TEMP/wb"
+          mkdir -p "$DIR"
+          : > "$DIR/results.jsonl"
+          idx=0
+
+          # 账号之间串行执行：日志不交错、请求量小，整体仍在几十秒内跑完。
+          # 单个账号失败不影响后面的账号，最后统一汇总并只推一张飞书卡。
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            name="${line%%=*}"
+            token="${line#*=}"
+            idx=$((idx + 1))
+
+            if [ -z "$token" ] || [ "$token" = "$line" ]; then
+              echo "::warning::账号「$name」未配置 token（Secret 缺失），已跳过"
+              continue
+            fi
+
+            echo "=== 账号「$name」 ==="
+            WB_ACCESS_TOKEN="$token" "$PY" wb_auto.py | tee "$DIR/acc$idx.log"
+            code=${PIPESTATUS[0]}
+            if [ "$code" -ne 0 ]; then
+              echo "::warning::账号「$name」存在未完成项（exit $code），详见上方日志"
+            fi
+
+            # 脚本最后一行输出 RESULT_JSON，收集起来供汇总步骤拼卡片
+            if grep -q '^RESULT_JSON ' "$DIR/acc$idx.log"; then
+              grep '^RESULT_JSON ' "$DIR/acc$idx.log" | tail -n 1 | sed 's/^RESULT_JSON //' \
+                | NAME="$name" "$PY" -c 'import json, os, sys; d = json.load(sys.stdin); d["account"] = os.environ["NAME"]; print(json.dumps(d, ensure_ascii=False))' \
+                >> "$DIR/results.jsonl"
+            else
+              echo "::warning::账号「$name」未产出结论文案"
+            fi
+          done <<< "$WB_TOKENS"
+
+      - name: 汇总并推送飞书
+        if: always()
+        env:
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+          WB_DIR: ${{ runner.temp }}/wb
         run: |
           set -uo pipefail
           PY="${{ steps.py.outputs.python_path }}"
-          set +e
-          "$PY" wb_auto.py
-          code=$?
-          set -e
-          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          # 签到成功即成功：脚本自身已把猫猫失败与签到结论解耦，
-          # 这里统一以 0 退出，仅用 warning 提示存在未完成项。
-          if [ "$code" -ne 0 ]; then
-            echo "::warning::本轮存在未完成项，详见上方日志与飞书卡片"
-          fi
-          exit 0
+          # 多账号合并成一张卡：签到、猫猫旅行各按账号分节，避免刷屏。
+          # 直接复用 wb_auto.push_feishu，卡片样式与单账号时完全一致。
+          "$PY" - <<'PYEOF'
+          import json
+          import os
+          import sys
 
-      - name: 汇总
-        if: always()
-        env:
-          RESULT_FILE: ${{ runner.temp }}/wb_result.json
-        run: |
-          set -uo pipefail
-          {
-            echo "### Buddy 加油站每日自动化"
-            echo ""
-            echo "- 运行时间：$(date -u '+%Y-%m-%d %H:%M:%S UTC')（cron 为 UTC）"
-          } >> "$GITHUB_STEP_SUMMARY"
-          if [ -f "$RESULT_FILE" ]; then
-            cat "$RESULT_FILE" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "- 未产出结论文案，请查看上方日志" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          import wb_auto
+
+          results_path = os.path.join(os.environ["WB_DIR"], "results.jsonl")
+          rows = []
+          if os.path.exists(results_path):
+              with open(results_path, encoding="utf-8") as f:
+                  rows = [json.loads(line) for line in f if line.strip()]
+
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_path:
+              with open(summary_path, "a", encoding="utf-8") as f:
+                  f.write("### Buddy 加油站每日自动化（多账号）\n\n")
+                  if rows:
+                      f.write("| 账号 | 签到 | 猫猫旅行 |\n| --- | --- | --- |\n")
+                      for r in rows:
+                          f.write("| %s | %s | %s |\n" % (
+                              r["account"],
+                              ("✅ " if r["checkin"]["ok"] else "❌ ") + r["checkin"]["report"],
+                              "🐱 " + r["buddy"].get("report", "无结论"),
+                          ))
+                  else:
+                      f.write("- 本轮没有产出任何账号结论，请查看上方日志\n")
+                  f.write("\n")
+
+          if not rows:
+              sys.exit(0)
+
+          checkin_line = "\n".join(
+              "%s **%s**：%s" % ("✅" if r["checkin"]["ok"] else "❌",
+                                r["account"], r["checkin"]["report"])
+              for r in rows
+          )
+          buddy_line = "\n".join(
+              "🐱 **%s**：%s" % (r["account"], r["buddy"].get("report", "无结论"))
+              for r in rows
+          )
+          overall_ok = all(r["checkin"]["ok"] for r in rows)
+
+          webhook = os.environ.get("FEISHU_WEBHOOK")
+          push_ok, reason = None, "未配置（缺少 FEISHU_WEBHOOK，本次不推送）"
+          if webhook:
+              push_ok, reason = wb_auto.push_feishu(
+                  webhook,
+                  "每日自动化（%d 个账号）" % len(rows),
+                  checkin_line,
+                  buddy_line,
+                  overall_ok,
+              )
+
+          push_line = "✅ 已推送飞书" if push_ok else "❌ 推送失败：%s" % reason
+          print(push_line)
+          if summary_path:
+              with open(summary_path, "a", encoding="utf-8") as f:
+                  f.write("- 飞书推送：%s\n" % push_line)
+          PYEOF

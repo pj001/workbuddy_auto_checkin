@@ -10,7 +10,8 @@ WorkBuddy「Buddy 加油站」的每日自动化：**签到领积分**、**派�
 > | --- | --- | --- |
 > | 适合 | 习惯 GitHub 的用户 | **不想碰 GitHub / 零命令行** 的用户 |
 > | 托管 | GitHub Actions 免费定时任务 | 金山文档智能表格脚本 + 免费定时任务 |
-> | 配置 | Fork 仓库 + 填两个 Secret | 建表格 → 粘脚本 → 填两个单元格 |
+> | 配置 | Fork 仓库 + 填两个 Secret（多账号各加一条） | 建表格 → 粘脚本 → 填两个单元格 |
+> | 多账号 | 支持（每账号一条 Secret，卡片合并为一张） | 暂不支持 |
 > | 结果 | Actions 日志 / 飞书卡片 | 直接回写表格 / 飞书卡片 |
 >
 > 两种版本的 token 都由本机导出一次（[第 4 步](#第-4-步导出登录凭证二选一)）：
@@ -21,6 +22,7 @@ WorkBuddy「Buddy 加油站」的每日自动化：**签到领积分**、**派�
 
 - **云端定时** — 免费 runner + `schedule` 触发，本机关机照常执行
 - **一次做两件事** — 签到与成长中心旅行在同一次运行里完成
+- **多账号** — 每个账号一条 Secret，一次运行全部签完；飞书合并成一张卡片，不刷屏
 - **幂等** — 先查状态再决定是否领取；已签不重领，已派不重派
 - **结论解耦** — 猫猫模块任何异常都不影响签到结论；整体成败只看签到
 - **零明文入库** — 仓库不含任何凭据；token 由本机脚本导出后写入 GitHub Secret
@@ -32,7 +34,8 @@ WorkBuddy「Buddy 加油站」的每日自动化：**签到领积分**、**派�
 ┌──────────────────┐    gh secret   ┌────────────────────┐
 │ refresh_token.py │ ─────────────► │ Secret:            │
 │  读登录态 → 解密 │                │  WB_ACCESS_TOKEN   │
-└──────────────────┘                │  FEISHU_WEBHOOK    │
+└──────────────────┘                │  WB_ACCESS_TOKEN_2 │ ← 可选，多账号
+                                    │  FEISHU_WEBHOOK    │
                                     └─────────┬──────────┘
                                               │ 每天 cron
                                     ┌─────────▼──────────┐        ┌──────────────┐
@@ -127,18 +130,19 @@ python refresh_token.py
 
 
 
-### 第 5 步：把两个 Secret 填进仓库
+### 第 5 步：把 Secret 填进仓库
 
 打开**你自己的仓库** → **Settings** → 左侧 **Secrets and variables** → **Actions** → 点绿色的 **New repository secret**：
 
 ![](assets/github_配置action的飞书、wb_access_token.png)
 
-需要填两条：
+单账号最少填两条（多账号再加）：
 
 | Name | Secret 里填什么 |
 | --- | --- |
 | `WB_ACCESS_TOKEN` | 第 4 步方式 B 复制的那串字符 |
 | `FEISHU_WEBHOOK` | 第 3 步拿到的飞书机器人地址 |
+| `WB_ACCESS_TOKEN_2` | **可选**：第二个账号的 token，见下方「多账号」 |
 
 > 方式 A 已经自动写入 `WB_ACCESS_TOKEN` 的，这里只需要再填 `FEISHU_WEBHOOK` 一条。
 > 填完这个页面应该能看到两条记录（如上面截图所示）。
@@ -152,7 +156,32 @@ python refresh_token.py
 
 > 这个页面显示绿色不代表签到一定成功（猫猫出问题不影响整体结论）。**以飞书收到的消息为准。**
 
+### 多账号
+
+GitHub Actions 版支持一个仓库跑多个账号：
+
+1. 每个账号对应一条 Secret：`WB_ACCESS_TOKEN`（第 1 个）、`WB_ACCESS_TOKEN_2`（第 2 个），更多账号依次加 `WB_ACCESS_TOKEN_3`…
+2. 在 `.github/workflows/daily.yml` 的 `WB_TOKENS` 里加一行即可（默认已预置账号 1、账号 2）：
+   ```yaml
+   WB_TOKENS: |
+     账号1=${{ secrets.WB_ACCESS_TOKEN }}
+     账号2=${{ secrets.WB_ACCESS_TOKEN_2 }}
+   ```
+   等号前的文字只是飞书卡片里的显示名，可以改成「主号」「小号」等。
+3. **每个账号要单独导出 token**：在 WorkBuddy 里登录对应账号 → 运行 `python refresh_token.py` 手动复制。`--gh-repo` 模式固定写入 `WB_ACCESS_TOKEN`，第二个账号请手动在 GitHub 建 Secret 粘贴。
+4. 运行时账号之间**串行**执行，单个账号失败只记 warning，不影响其他账号；飞书只发**一张卡**，卡片分「签到」「猫猫旅行」两节，每节里每个账号一行；Actions 的 step summary 是多账号表格。
+5. token 各自约 28 天过期，需要逐个账号重导、更新自己那条 Secret。
+
 ## 配置项
+
+### Actions 工作流（`daily.yml`）
+
+| 变量 | 说明 |
+| --- | --- |
+| `WB_TOKENS` | 账号列表，每行 `显示名=token`，token 来自各条 Secret。workflow 按此逐账号调用 `wb_auto.py`，跑完后合并推送一张飞书卡 |
+| `WB_ENDPOINT` | 接口地址，默认 `https://copilot.tencent.com` |
+
+`wb_auto.py` 本身仍是单账号逻辑，多账号由 workflow 循环调用实现。
 
 ### Actions 侧（`wb_auto.py`）
 
@@ -199,7 +228,7 @@ python refresh_token.py
 | `1` | 签到未达成（猫猫失败不在此列） |
 | `2` | 缺少 `WB_ACCESS_TOKEN` |
 
-workflow 中脚本以 `exit 0` 收尾，只对未完成项发 `::warning::`，因此一次运行显示绿色不代表签到一定成功——**以日志、step summary 与飞书卡片为准**。
+workflow 多账号时逐个执行并收集退出码，只对未完成的账号发 `::warning::`，不会因个别账号失败中断整轮或让运行变红。因此一次运行显示绿色不代表签到一定成功——**以日志、step summary 与飞书卡片为准**。
 
 ## 接口
 
@@ -240,7 +269,7 @@ wps/                          WPS 金山文档版（脚本 + 说明，见 wps/RE
 
 ## 常见问题
 
-**令牌过期** — token 由客户端签发，有效期约 28 天（`expiresIn` 2419200）。日志或飞书出现「认证被拒」时，本机重跑 `python refresh_token.py --gh-repo OWNER/REPO` 覆盖即可（`OWNER/REPO` 换成你自己的仓库；exe 同理：`refresh_token.exe --gh-repo OWNER/REPO`）。
+**令牌过期** — token 由客户端签发，有效期约 28 天（`expiresIn` 2419200）。日志或飞书出现「认证被拒」时，本机重跑 `python refresh_token.py --gh-repo OWNER/REPO` 覆盖即可（`OWNER/REPO` 换成你自己的仓库；exe 同理：`refresh_token.exe --gh-repo OWNER/REPO`）。多账号要逐个账号登录后重导，分别更新自己的 Secret（`WB_ACCESS_TOKEN`、`WB_ACCESS_TOKEN_2`…）；第二个及以后的账号用无参数方式打印 token 后手动粘贴。
 
 **fork 之后 Actions 页签是空的** — fork 来的仓库默认不启用 Actions。进 Actions 页签，点页面中间的 **I understand my workflows, go ahead and enable them** 启用一次即可。
 
