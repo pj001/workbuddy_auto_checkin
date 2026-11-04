@@ -22,7 +22,7 @@ WorkBuddy「Buddy 加油站」的每日自动化：**签到领积分**、**派�
 
 - **云端定时** — 免费 runner + `schedule` 触发，本机关机照常执行
 - **一次做两件事** — 签到与成长中心旅行在同一次运行里完成
-- **多账号** — 默认 10 个账号位：`WB_ACCESS_TOKEN` 即账号 1，`WB_ACCESS_TOKEN_2..10` 依次对应，没配的自动跳过；飞书合并成一张卡片
+- **多账号** — 默认 10 个账号位，在同一个 job 内循环：`WB_ACCESS_TOKEN` 即账号 1，`WB_ACCESS_TOKEN_2..10` 依次对应，没配的自动跳过；飞书合并成一张卡片
 - **幂等** — 先查状态再决定是否领取；已签不重领，已派不重派
 - **结论解耦** — 猫猫模块任何异常都不影响签到结论；整体成败只看签到
 - **零明文入库** — 仓库不含任何凭据；token 由本机脚本导出后写入 GitHub Secret
@@ -159,19 +159,19 @@ python refresh_token.py
 
 ### 多账号
 
-workflow 默认就有 **10 个账号位**，不需要任何额外配置：
+workflow 默认就有 **10 个账号位**，而且在**同一个 job 里循环执行**，不会为每个账号单独起 job：
 
 1. 账号 1 用 `WB_ACCESS_TOKEN`（也可以改用 `WB_ACCESS_TOKEN_1`）。
 2. 账号 2..10 分别用 `WB_ACCESS_TOKEN_2` … `WB_ACCESS_TOKEN_10`。
-3. **没配 token 的账号位会自动跳过**，日志里显示「账号 N 未配置 token，跳过」，不影响已配置的账号。
-4. 每个账号一个 job **并行**执行（`max-parallel: 10`），单个账号失败只记 warning，不影响其他账号；全部跑完后汇总成**一张**飞书卡（按编号排序），step summary 是多账号表格。
-5. 想加第 11 个账号：在 `.github/workflows/daily.yml` 的 `matrix.account` 列表末尾加 `11`，再建 `WB_ACCESS_TOKEN_11`。
+3. **没配 token 的账号位直接跳过**，日志里显示「账号 N 未配置 token，跳过」，不占 runner、不发请求。
+4. 已配置的账号按编号顺序串行执行，单个账号失败只记 warning，不影响其他账号；全部跑完后汇总成**一张**飞书卡（按编号排序），step summary 是多账号表格。
+5. 想加第 11 个账号：在 `.github/workflows/daily.yml` 的 `T1..T10` 环境变量后加一条 `T11`，再把循环范围/默认列表加上 `11`，并建 `WB_ACCESS_TOKEN_11`。
 6. **手动运行可以在 Run workflow 面板里填 `accounts`**（逗号分隔，如 `1,2,5`）；留空则跑默认的 1-10。定时任务不受影响。
 7. token 各自约 28 天过期，更新对应 Secret 即可。
 
-> 为什么没配的账号位也会起 job？GitHub 无法在运行时枚举或读取 Secret，只能按固定编号逐个尝试；空账号的 job 只做一次 token 检查就退出，很快。
+> 为什么是固定 10 个槽位？GitHub 无法在运行时枚举或读取 Secret，只能按固定编号逐个尝试。现在所有槽位在同一个 job 里循环，空槽位只多一行日志，不会多起 job。
 
-> 账号很多时注意 Actions 额度：每个账号位一个 job（约 20–30 秒），公开仓库免费不限，私有仓库每月 2000 分钟。
+> 账号很多时注意额度：一个 job 串行跑完所有已配置账号，每账号约 5–10 秒；公开仓库免费不限，私有仓库每月 2000 分钟。
 
 ## 配置项
 
@@ -184,9 +184,9 @@ workflow 默认就有 **10 个账号位**，不需要任何额外配置：
 | `FEISHU_WEBHOOK` | Secret | 飞书机器人地址，缺失则不推送 |
 | `WB_ENDPOINT` | 环境变量 | 接口地址，默认 `https://copilot.tencent.com` |
 
-账号位默认 1-10；手动 Run workflow 时可用 `accounts` 输入框覆盖（逗号分隔，如 `1,2,5`）。要长期加第 11 个账号，在 `daily.yml` 的 `matrix.account` 默认列表里加 `11`。
+账号位默认 1-10；手动 Run workflow 时可用 `accounts` 输入框覆盖（逗号分隔，如 `1,2,5`）。要长期加第 11 个账号，在 `daily.yml` 里加一条 `T11` 并把默认列表扩展到 11。
 
-`wb_auto.py` 本身仍是单账号逻辑，多账号由 workflow 的 matrix 并行调用实现。
+`wb_auto.py` 本身仍是单账号逻辑，多账号由 workflow 在同一个 job 里循环调用实现。
 
 ### Actions 侧（`wb_auto.py`）
 
@@ -233,7 +233,7 @@ workflow 默认就有 **10 个账号位**，不需要任何额外配置：
 | `1` | 签到未达成（猫猫失败不在此列） |
 | `2` | 缺少 `WB_ACCESS_TOKEN` |
 
-workflow 给每个账号起一个并行 job，收集各自的退出码，只对未完成的账号发 `::warning::`，不会因个别账号失败中断整轮或让运行变红。因此一次运行显示绿色不代表签到一定成功——**以日志、step summary 与飞书卡片为准**。
+workflow 在同一个 job 里逐个账号执行，收集各自的退出码，只对未完成的账号发 `::warning::`，不会因个别账号失败中断整轮或让运行变红。因此一次运行显示绿色不代表签到一定成功——**以日志、step summary 与飞书卡片为准**。
 
 ## 接口
 
@@ -276,7 +276,7 @@ wps/                          WPS 金山文档版（脚本 + 说明，见 wps/RE
 
 **令牌过期** — token 由客户端签发，有效期约 28 天（`expiresIn` 2419200）。日志或飞书出现「认证被拒」时，本机重跑 `python refresh_token.py --gh-repo OWNER/REPO` 覆盖即可（`OWNER/REPO` 换成你自己的仓库；exe 同理：`refresh_token.exe --gh-repo OWNER/REPO`）。多账号要逐个账号登录后重导，更新对应编号的 Secret（`WB_ACCESS_TOKEN_2` 等）；`--gh-repo` 只写 `WB_ACCESS_TOKEN`，编号 Secret 请在网页手动更新。
 
-**只跑了账号 1 / 只签到一个账号** — 检查 `WB_ACCESS_TOKEN_2` 等编号 Secret 是否存在（账号 1 用 `WB_ACCESS_TOKEN`，账号 2 用 `WB_ACCESS_TOKEN_2`…）。默认有 10 个账号位，没配 token 的 job 会在日志里显示「账号 N 未配置 token，跳过」。
+**只跑了账号 1 / 只签到一个账号** — 检查 `WB_ACCESS_TOKEN_2` 等编号 Secret 是否存在（账号 1 用 `WB_ACCESS_TOKEN`，账号 2 用 `WB_ACCESS_TOKEN_2`…）。默认有 10 个账号位，没配 token 的账号会在日志里显示「账号 N 未配置 token，跳过」。
 
 **fork 之后 Actions 页签是空的** — fork 来的仓库默认不启用 Actions。进 Actions 页签，点页面中间的 **I understand my workflows, go ahead and enable them** 启用一次即可。
 

@@ -18,31 +18,21 @@ on:
   workflow_dispatch:
     inputs:
       accounts:
-        description: "账号编号，逗号分隔（如 1,2,3）；留空默认 1-10"
+        description: "账号编号，逗号分隔（如 1,2）；留空默认 1-10"
         required: false
         default: "1,2,3,4,5,6,7,8,9,10"
 
 permissions:
   contents: read
-  actions: read             # 汇总 job 需要读取本轮的 artifact
 
 concurrency:
   group: wb-daily
   cancel-in-progress: false
 
 jobs:
-  # 默认 10 个账号位：账号 1 用 WB_ACCESS_TOKEN（或 WB_ACCESS_TOKEN_1），
-  # 账号 N 用 WB_ACCESS_TOKEN_N；没配的账号直接跳过。
-  # 需要更多账号就往后加数字，不需要改其他配置。
-  checkin:
+  daily:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      max-parallel: 10
-      matrix:
-        # 手动运行时可在 Run workflow 里填账号编号；定时任务默认 1-10。
-        account: ${{ fromJSON(format('[{0}]', github.event.inputs.accounts || '1,2,3,4,5,6,7,8,9,10')) }}
+    timeout-minutes: 30
     steps:
       - name: 检出仓库
         uses: actions/checkout@v4
@@ -60,80 +50,91 @@ jobs:
           "$PY" -c 'import sys; print("使用解释器:", sys.executable, sys.version.split()[0])'
           echo "python_path=$PY" >> "$GITHUB_OUTPUT"
 
-      - name: 签到与派猫猫
+      - name: 执行签到与派猫猫（多账号）
         id: run
         env:
           WB_ENDPOINT: https://copilot.tencent.com
-          N: ${{ matrix.account }}
-          # 账号 1 兼容无后缀的 WB_ACCESS_TOKEN
-          TOKEN_N: ${{ secrets[format('WB_ACCESS_TOKEN_{0}', matrix.account)] }}
-          TOKEN_PLAIN: ${{ secrets.WB_ACCESS_TOKEN }}
+          # 定时任务默认 1-10；手动 Run workflow 时由 accounts 输入覆盖
+          ACCOUNTS: ${{ github.event.inputs.accounts }}
+          # 账号 1 兼容无后缀 Secret；账号 N 用 WB_ACCESS_TOKEN_N
+          T0: ${{ secrets.WB_ACCESS_TOKEN }}
+          T1: ${{ secrets.WB_ACCESS_TOKEN_1 }}
+          T2: ${{ secrets.WB_ACCESS_TOKEN_2 }}
+          T3: ${{ secrets.WB_ACCESS_TOKEN_3 }}
+          T4: ${{ secrets.WB_ACCESS_TOKEN_4 }}
+          T5: ${{ secrets.WB_ACCESS_TOKEN_5 }}
+          T6: ${{ secrets.WB_ACCESS_TOKEN_6 }}
+          T7: ${{ secrets.WB_ACCESS_TOKEN_7 }}
+          T8: ${{ secrets.WB_ACCESS_TOKEN_8 }}
+          T9: ${{ secrets.WB_ACCESS_TOKEN_9 }}
+          T10: ${{ secrets.WB_ACCESS_TOKEN_10 }}
         run: |
-          # GitHub 默认 bash -e；这里要自己记录退出码再继续，先关掉 -e
+          # GitHub 默认 bash -e；这里要收集每个账号的退出码再继续，先关掉 -e
           set +e
           set -uo pipefail
           PY="${{ steps.py.outputs.python_path }}"
+          DIR="$RUNNER_TEMP/wb"
+          mkdir -p "$DIR"
+          : > "$DIR/results.jsonl"
+          count=0
 
-          token="$TOKEN_N"
-          if [ -z "$token" ] && [ "$N" = "1" ]; then
-            token="$TOKEN_PLAIN"
-          fi
-          if [ -z "$token" ]; then
-            echo "账号 $N 未配置 token，跳过"
-            exit 0
-          fi
-
-          echo "=== 账号 $N ==="
-          WB_ACCESS_TOKEN="$token" "$PY" wb_auto.py | tee "$RUNNER_TEMP/acc-$N.log"
-          code=${PIPESTATUS[0]}
-          # 签到成功即成功；猫猫失败已在脚本内解耦，这里仅提示未完成项
-          if [ "$code" -ne 0 ]; then
-            echo "::warning::账号 $N 存在未完成项（exit $code），详见上方日志"
+          # 账号列表归一化：逗号分隔、去空白、去重、排序
+          list=$(printf '%s' "${ACCOUNTS:-1,2,3,4,5,6,7,8,9,10}" \
+            | tr -d ' \t\r' | tr ',' '\n' \
+            | grep -E '^[0-9]+$' | sort -n -u | paste -sd, -)
+          if [ -z "$list" ]; then
+            echo "::error::accounts 输入无效，应为逗号分隔的数字，例如 1,2"
+            exit 1
           fi
 
-          # 脚本最后一行输出 RESULT_JSON，收集起来供汇总 job 拼卡片
-          if grep -q '^RESULT_JSON ' "$RUNNER_TEMP/acc-$N.log"; then
-            grep '^RESULT_JSON ' "$RUNNER_TEMP/acc-$N.log" | tail -n 1 | sed 's/^RESULT_JSON //' \
-              | N="$N" "$PY" -c 'import json, os, sys; d = json.load(sys.stdin); n = os.environ["N"]; d["account"] = "账号" + n; d["account_index"] = int(n); print(json.dumps(d, ensure_ascii=False))' \
-              > "$RUNNER_TEMP/result-$N.jsonl"
-          else
-            echo "::warning::账号 $N 未产出结论文案"
+          # 一个 job 内串行遍历：没有多余的 checkin job，未配置的账号直接跳过
+          for n in $(printf '%s' "$list" | tr ',' ' '); do
+            if [ "$n" -lt 1 ] || [ "$n" -gt 10 ]; then
+              echo "账号 $n 超出 1-10，跳过（要扩位请改 daily.yml）"
+              continue
+            fi
+
+            token_var="T$n"
+            token="${!token_var:-}"
+            if [ "$n" = "1" ] && [ -z "$token" ]; then
+              token="${T0:-}"
+            fi
+            if [ -z "$token" ]; then
+              echo "账号 $n 未配置 token，跳过"
+              continue
+            fi
+
+            count=$((count + 1))
+            echo "=== 账号 $n ==="
+            # 单账号运行时不带 webhook，避免每个账号各推一张卡；最后统一推送
+            WB_ACCESS_TOKEN="$token" FEISHU_WEBHOOK= \
+              "$PY" wb_auto.py | tee "$DIR/acc-$n.log"
+            code=${PIPESTATUS[0]}
+            if [ "$code" -ne 0 ]; then
+              echo "::warning::账号 $n 存在未完成项（exit $code），详见上方日志"
+            fi
+
+            if grep -q '^RESULT_JSON ' "$DIR/acc-$n.log"; then
+              grep '^RESULT_JSON ' "$DIR/acc-$n.log" | tail -n 1 | sed 's/^RESULT_JSON //' \
+                | N="$n" "$PY" -c 'import json, os, sys; d = json.load(sys.stdin); n = os.environ["N"]; d["account"] = "账号" + n; d["account_index"] = int(n); print(json.dumps(d, ensure_ascii=False))' \
+                >> "$DIR/results.jsonl"
+            else
+              echo "::warning::账号 $n 未产出结论文案"
+            fi
+          done
+
+          if [ "$count" -eq 0 ]; then
+            echo "::error::没有任何账号配置了 token，请检查 Secret WB_ACCESS_TOKEN / WB_ACCESS_TOKEN_N"
+            exit 1
           fi
-
-      - name: 上传账号结果
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: wb-result-${{ matrix.account }}
-          path: ${{ runner.temp }}/result-${{ matrix.account }}.jsonl
-          if-no-files-found: ignore
-          retention-days: 3
-
-  # 等所有账号跑完，汇总成一张飞书卡（一次发送，不刷屏）
-  notify:
-    needs: checkin
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: 检出仓库
-        uses: actions/checkout@v4
-
-      - name: 下载各账号结果
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          pattern: wb-result-*
-          path: ${{ runner.temp }}/results
-          merge-multiple: true
 
       - name: 汇总并推送飞书
+        if: always()
         env:
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
-          RESULTS_DIR: ${{ runner.temp }}/results
+          RESULTS_FILE: ${{ runner.temp }}/wb/results.jsonl
         run: |
           python3 - <<'PYEOF'
-          import glob
           import json
           import os
           import sys
@@ -142,9 +143,10 @@ jobs:
           import wb_auto
 
           rows = []
-          for path in glob.glob(os.path.join(os.environ["RESULTS_DIR"], "*.jsonl")):
+          path = os.environ["RESULTS_FILE"]
+          if os.path.exists(path):
               with open(path, encoding="utf-8") as f:
-                  rows.extend(json.loads(line) for line in f if line.strip())
+                  rows = [json.loads(line) for line in f if line.strip()]
           rows.sort(key=lambda r: r.get("account_index", 0))
 
           summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -160,7 +162,7 @@ jobs:
                               "🐱 " + r["buddy"].get("report", "无结论"),
                           ))
                   else:
-                      f.write("- 本轮没有产出任何账号结论，请查看各账号 job 日志\n")
+                      f.write("- 本轮没有产出任何账号结论，请查看上方日志\n")
                   f.write("\n")
 
           if not rows:
