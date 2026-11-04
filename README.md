@@ -273,6 +273,8 @@ wps/                          WPS 金山文档版（脚本 + 说明，见 wps/RE
 
 **令牌过期** — token 由客户端签发，有效期约 28 天（`expiresIn` 2419200）。日志或飞书出现「认证被拒」时，本机重跑 `python refresh_token.py --gh-repo OWNER/REPO` 覆盖即可（`OWNER/REPO` 换成你自己的仓库；exe 同理：`refresh_token.exe --gh-repo OWNER/REPO`）。多账号要逐个账号登录后重导，更新对应编号的 Secret（`WB_ACCESS_TOKEN_2` 等）；`--gh-repo` 只写 `WB_ACCESS_TOKEN`，编号 Secret 请在网页手动更新。
 
+**只跑了账号 1 / 只签到一个账号** — 检查 Variables 里的 `WB_ACCOUNT_COUNT`（或 `WB_ACCOUNT_KEYS`）是否等于账号数，以及 `WB_ACCESS_TOKEN_2` 等编号 Secret 是否存在。workflow 无法自动枚举 Secret，账号数量必须由变量指定；变量没配时默认只跑账号 1，运行日志里会有对应 warning。
+
 **fork 之后 Actions 页签是空的** — fork 来的仓库默认不启用 Actions。进 Actions 页签，点页面中间的 **I understand my workflows, go ahead and enable them** 启用一次即可。
 
 **Actions 页签看不到 workflow** — 确认 `.github/workflows/daily.yml` 已入库，且仓库的 Actions 功能未被禁用。

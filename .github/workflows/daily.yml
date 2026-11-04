@@ -42,6 +42,8 @@ jobs:
           #   WB_ACCOUNT_KEYS=1,3,7 编号不连续时用它指定（优先级高于 COUNT）
           COUNT: ${{ vars.WB_ACCOUNT_COUNT }}
           KEYS: ${{ vars.WB_ACCOUNT_KEYS }}
+          # 仅用于配置提醒：存在编号 _2 的 Secret 却没设账号数量时给出 warning
+          TOKEN_2: ${{ secrets.WB_ACCESS_TOKEN_2 }}
         run: |
           python3 - <<'EOF' >> "$GITHUB_OUTPUT"
           import json
@@ -55,6 +57,11 @@ jobs:
               accounts = list(range(1, count + 1))
           print("accounts=" + json.dumps(accounts))
           EOF
+
+          # 常见配置遗漏：加了 WB_ACCESS_TOKEN_2，却忘了设账号数量，导致只跑账号 1
+          if [ -n "$TOKEN_2" ] && [ -z "$KEYS" ] && [ "${COUNT:-1}" -le 1 ]; then
+            echo "::warning::检测到 Secret WB_ACCESS_TOKEN_2，但变量 WB_ACCOUNT_COUNT / WB_ACCOUNT_KEYS 未配置，本次只会跑账号 1。请在 Settings → Secrets and variables → Actions → Variables 里设置 WB_ACCOUNT_COUNT=2"
+          fi
 
   # 每个账号一个并行 job；单个账号失败不影响其他账号。
   checkin:
