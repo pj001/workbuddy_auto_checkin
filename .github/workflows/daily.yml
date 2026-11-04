@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       accounts:
-        description: "账号编号，逗号分隔（如 1,2）；留空则按 WB_COUNT 变量"
+        description: "账号编号，逗号分隔（如 1,2）；留空则按 WB_ACCESS_COUNT 变量"
         required: false
         default: ""
 
@@ -55,8 +55,10 @@ jobs:
         env:
           WB_ENDPOINT: https://copilot.tencent.com
           # 手动 Run workflow 时由 accounts 输入覆盖；
-          # 留空时按仓库变量 WB_COUNT 决定跑账号 1..N（默认 1）
+          # 留空时按仓库变量 WB_ACCESS_COUNT 决定跑账号 1..N（默认 1）
           ACCOUNTS: ${{ github.event.inputs.accounts }}
+          WB_ACCESS_COUNT: ${{ vars.WB_ACCESS_COUNT }}
+          # 兼容旧变量名
           WB_COUNT: ${{ vars.WB_COUNT }}
           # 账号 1 兼容无后缀 Secret；账号 N 用 WB_ACCESS_TOKEN_N
           T0: ${{ secrets.WB_ACCESS_TOKEN }}
@@ -80,18 +82,18 @@ jobs:
           : > "$DIR/results.jsonl"
           count=0
 
-          # 账号来源：手动输入优先；留空则按 WB_COUNT 展开 1..N
+          # 账号来源：手动输入优先；留空则按 WB_ACCESS_COUNT 展开 1..N
           if [ -n "${ACCOUNTS:-}" ]; then
             list_src="$ACCOUNTS"
           else
-            count="${WB_COUNT:-1}"
-            case "$count" in ''|*[!0-9]*) count=1 ;; esac
-            [ "$count" -ge 1 ] || count=1
-            if [ "$count" -gt 10 ]; then
-              echo "::warning::WB_COUNT=$count 超过账号位上限 10，只跑 1-10"
-              count=10
+            limit="${WB_ACCESS_COUNT:-${WB_COUNT:-1}}"
+            case "$limit" in ''|*[!0-9]*) limit=1 ;; esac
+            [ "$limit" -ge 1 ] || limit=1
+            if [ "$limit" -gt 10 ]; then
+              echo "::warning::WB_ACCESS_COUNT=$limit 超过账号位上限 10，只跑 1-10"
+              limit=10
             fi
-            list_src=$(seq -s, 1 "$count")
+            list_src=$(seq -s, 1 "$limit")
           fi
 
           # 归一化：逗号分隔、去空白、去重、排序
@@ -99,7 +101,7 @@ jobs:
             | tr -d ' \t\r' | tr ',' '\n' \
             | grep -E '^[0-9]+$' | sort -n -u | paste -sd, -)
           if [ -z "$list" ]; then
-            echo "::error::账号列表无效，请检查 accounts 输入或变量 WB_COUNT"
+            echo "::error::账号列表无效，请检查 accounts 输入或变量 WB_ACCESS_COUNT"
             exit 1
           fi
 
